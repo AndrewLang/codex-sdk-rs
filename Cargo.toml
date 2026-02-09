@@ -1,0 +1,29 @@
+[package]
+description = "Rust SDK for Codex"
+edition = "2021"
+license = "MIT"
+name = "codex-sdk"
+version = "0.1.0"
+
+[dependencies]
+async-stream = "0.3"
+env_logger = "0.11"
+futures = "0.3"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = [
+    "fs",
+    "io-util",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+tokio-util = "0.7"
+
+[dev-dependencies]
+pretty_assertions = "1"
