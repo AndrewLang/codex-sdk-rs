@@ -4,6 +4,7 @@ edition = "2021"
 license = "MIT"
 name = "codex-sdk"
 version = "0.1.0"
+repository = "https://github.com/AndrewLang/codex-sdk-rs"
 
 [dependencies]
 async-stream = "0.3"
