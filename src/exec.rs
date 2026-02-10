@@ -3,12 +3,13 @@ use std::env;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::process::Stdio;
 
 use async_stream::try_stream;
 use futures::Stream;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
@@ -100,13 +101,7 @@ impl CodexExec {
     ) -> Result<Self, CodexError> {
         let executable_path = match executable_path {
             Some(path) => path,
-            None => {
-                if cfg!(windows) {
-                    PathBuf::from("codex.cmd")
-                } else {
-                    PathBuf::from("codex")
-                }
-            }
+            None => PathBuf::from("codex"),
         };
 
         Ok(Self {
@@ -258,7 +253,7 @@ impl CodexExec {
     }
 
     pub fn run(&self, args: CodexExecArgs) -> Result<CodexLineStream, CodexError> {
-        let mut command = self.build_command(&args)?;
+        let command = self.build_command(&args)?;
         let executable_path = self.executable_path.clone();
         let cancel = args.cancel.clone();
         let input = args.input.clone();
@@ -276,42 +271,13 @@ impl CodexExec {
                 }
             }
 
-            let (exe, pre_args) = if cfg!(windows)
-                && executable_path.extension().map_or(false, |e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
-            {
-                let parent = executable_path.parent().unwrap_or(Path::new("."));
-                let js_path_openai = parent.join("node_modules").join("@openai").join("codex").join("bin").join("codex.js");
-                let js_path_generic = parent.join("node_modules").join("codex").join("bin").join("codex.js");
+            let mut child = Self::spawn_codex(&executable_path, &[], &command.args, &command.env)?;
 
-                if js_path_openai.exists() {
-                     let node_beside = parent.join("node.exe");
-                     let node_exe = if node_beside.exists() { node_beside } else { PathBuf::from("node") };
-                     (node_exe, vec![js_path_openai.to_string_lossy().to_string()])
-                } else if js_path_generic.exists() {
-                     let node_beside = parent.join("node.exe");
-                     let node_exe = if node_beside.exists() { node_beside } else { PathBuf::from("node") };
-                     (node_exe, vec![js_path_generic.to_string_lossy().to_string()])
-                } else {
-                    (PathBuf::from("cmd"), vec!["/C".to_string(), executable_path.to_string_lossy().to_string()])
-                }
-            } else {
-                (executable_path.clone(), vec![])
-            };
-
-            // Pass input as argument instead of stdin to avoid Windows pipe issues
-            command.args.push(input);
-
-            log::debug!("Spawning codex at {}", exe.display());
-            log::debug!("Command args: {:?} {:?}", pre_args, command.args);
-            let mut child = Command::new(&exe)
-                .args(&pre_args)
-                .args(&command.args)
-                .envs(&command.env)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()?;
-
+            if let Some(mut stdin) = child.stdin.take() {
+                use tokio::io::AsyncWriteExt;
+                stdin.write_all(input.as_bytes()).await?;
+                stdin.shutdown().await?;
+            }
 
             let stdout = child.stdout.take().ok_or(CodexError::MissingChildStream("stdout"))?;
             let stderr = child.stderr.take().ok_or(CodexError::MissingChildStream("stderr"))?;
@@ -332,19 +298,19 @@ impl CodexExec {
             loop {
                 let action = if exit_status.is_some() {
                     LoopAction::Line(lines.next_line().await?)
-                } else if let Some(token) = &cancel {
+                } else {
                     let result: Result<LoopAction, CodexError> = tokio::select! {
-                        _ = token.cancelled() => {
+                        _ = async {
+                            if let Some(token) = &cancel {
+                                token.cancelled().await;
+                            } else {
+                                std::future::pending::<()>().await;
+                            }
+                        } => {
                             child.kill().await.ok();
                             log::debug!("Execution aborted during stream");
                             Err(CodexError::Aborted)
                         }
-                        line = lines.next_line() => line.map(LoopAction::Line).map_err(CodexError::from),
-                        _ = poll.tick() => Ok(LoopAction::Tick),
-                    };
-                    result?
-                } else {
-                    let result: Result<LoopAction, CodexError> = tokio::select! {
                         line = lines.next_line() => line.map(LoopAction::Line).map_err(CodexError::from),
                         _ = poll.tick() => Ok(LoopAction::Tick),
                     };
@@ -385,6 +351,33 @@ impl CodexExec {
         };
 
         Ok(Box::pin(stream))
+    }
+
+    fn spawn_codex(
+        exe: &Path,
+        pre_args: &[String],
+        args: &[String],
+        envs: &HashMap<String, String>,
+    ) -> Result<Child, CodexError> {
+        #[cfg(target_os = "windows")]
+        let mut command = {
+            let mut cmd = Command::new("cmd");
+            cmd.arg("/C").arg(exe);
+            cmd
+        };
+
+        #[cfg(not(target_os = "windows"))]
+        let mut command = Command::new(exe);
+
+        command
+            .args(pre_args)
+            .args(args)
+            .envs(envs)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(CodexError::from)
     }
 
     fn capture_stderr(stderr: tokio::process::ChildStderr) -> JoinHandle<Vec<u8>> {
