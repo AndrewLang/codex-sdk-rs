@@ -20,16 +20,22 @@ pub struct Usage {
 pub enum ThreadEvent {
     #[serde(rename = "thread.started")]
     ThreadStarted { thread_id: String },
+
     #[serde(rename = "turn.started")]
     TurnStarted,
+
     #[serde(rename = "turn.completed")]
     TurnCompleted { usage: Usage },
+
     #[serde(rename = "turn.failed")]
     TurnFailed { error: ThreadError },
+
     #[serde(rename = "item.started")]
     ItemStarted { item: ThreadItem },
+
     #[serde(rename = "item.updated")]
     ItemUpdated { item: ThreadItem },
+
     #[serde(rename = "item.completed")]
     ItemCompleted { item: ThreadItem },
     #[serde(rename = "error")]
