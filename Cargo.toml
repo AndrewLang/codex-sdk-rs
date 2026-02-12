@@ -3,7 +3,7 @@ description = "Rust SDK for Codex"
 edition = "2021"
 license = "MIT"
 name = "codex-sdk"
-version = "0.1.0"
+version = "0.1.1"
 repository = "https://github.com/AndrewLang/codex-sdk-rs"
 
 [dependencies]
